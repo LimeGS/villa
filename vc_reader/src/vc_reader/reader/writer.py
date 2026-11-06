@@ -33,6 +33,11 @@ def compress_bytes(data: Any, compressor: dict[str, Any] | None, *, itemsize: in
     return _reader.compress_bytes(np.frombuffer(data, np.uint8), compressor, int(itemsize), [int(n) for n in shape])
 
 
+def decode_chunk(data: Any, metadata: dict[str, Any], max_decode_bytes: int = 268435456) -> bytes:
+    """Decode a stored chunk snapshot to C-order bytes in its declared dtype."""
+    return _reader.decode_chunk(np.frombuffer(data, np.uint8), metadata, max_decode_bytes)
+
+
 def decompress_bytes(data: Any, compressor: dict[str, Any] | None, size: int) -> bytes:
     """The reverse of :func:`compress_bytes`, decoding to exactly ``size`` bytes."""
     return _reader.decompress_bytes(np.frombuffer(data, np.uint8), compressor, int(size))
@@ -54,19 +59,21 @@ class ObjectStore:
     Replacing an object is atomic. Reads of a public prefix work with ``auth=None``. Picklable.
     """
 
-    def __init__(self, location: str | os.PathLike[str], *, auth: Any = "aws", connections: int = 16):
+    def __init__(self, location: str | os.PathLike[str], *, auth: Any = "aws", connections: int = 16,
+                 max_read_bytes: int | None = None):
         location = os.fspath(location)
-        self._native = _reader.Store(location, _write_access(location, auth), connections)
+        self._native = _reader.Store(location, _write_access(location, auth), connections, max_read_bytes)
         self.location = self._native.location
+        self._max_read_bytes = max_read_bytes
 
     def __getstate__(self):
-        return self.location, self._native.access
+        return self.location, self._native.access, self._max_read_bytes
 
     def __setstate__(self, state):
-        self.__init__(state[0], auth=state[1])
+        self.__init__(state[0], auth=state[1], max_read_bytes=state[2])
 
     def read(self, name: str) -> bytes | None:
-        """The object's bytes; None when it does not exist."""
+        """The object's bytes, bounded by max_read_bytes; None when it does not exist."""
         return self._native.read(name)
 
     def write(self, name: str, data: bytes | str) -> None:

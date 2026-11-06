@@ -28,7 +28,7 @@ std::size_t ArrayMeta::chunkBytes() const
 {
     std::size_t n = itemsize();
     for (const auto c : chunks)
-        n *= static_cast<std::size_t>(c);
+        n = ChunkLayout::multiply(n, static_cast<std::size_t>(c));
     return n;
 }
 
@@ -51,11 +51,13 @@ std::string ArrayMeta::codec() const
     bool packbits = false;
     if (!filters.is_null() && !filters.empty()) {
         packbits = filters.size() == 1 && filters[0].value("id", std::string()) == "packbits" && type.kind == 'b';
-        if (!packbits)
-            throw std::invalid_argument("vc_reader cannot read arrays with these numcodecs filters: " + filters.dump());
     }
-    if (order != "C")
-        throw std::invalid_argument("vc_reader cannot read arrays stored in Fortran order");
+    if (order != "C" || (!packbits && !filters.is_null() && !filters.empty())) {
+        const auto id = "layout:" + Json{{"codec", codec}, {"chunks", chunks}, {"dtype", dtype},
+                                         {"order", order}, {"filters", filters}}.dump();
+        parse_chunk_codec(id);
+        return id;
+    }
     return packbits ? "packbits+" + codec : codec;
 }
 

@@ -9,6 +9,11 @@
 
 namespace vcr::zarr {
 
+// Decode one verified encoded snapshot to C-order bytes in the metadata's dtype.
+// The limit applies to the decoded chunk and every intermediate filter buffer.
+std::vector<std::uint8_t> decodeChunk(const Json& metadata, std::span<const std::uint8_t> data,
+                                    std::size_t maxDecodeBytes = 268435456);
+
 // ---- stores ---------------------------------------------------------------------------
 
 // The objects below a local directory or an s3:// prefix. Replacing an object is atomic:
@@ -17,7 +22,8 @@ namespace vcr::zarr {
 // environment are read again once when they stop working. Thread-safe.
 class Store {
 public:
-    explicit Store(const std::filesystem::path& location, const Access& access = {}, int connections = 16);
+    explicit Store(const std::filesystem::path& location, const Access& access = {}, int connections = 16,
+                   std::optional<std::size_t> maxReadBytes = std::nullopt);
     Store(Store&&) noexcept;
     Store& operator=(Store&&) noexcept;
     ~Store();
@@ -26,6 +32,7 @@ public:
     const Access& access() const;
     bool remote() const;
 
+    // maxReadBytes bounds returned bytes and HTTP encoded payloads, independently of disk caching.
     std::optional<std::string> read(const std::string& name) const;
     // Locally an atomicWrite with the given durability; remotely a PUT.
     void write(const std::string& name, std::string_view data, Durability durability = Durability::Fast) const;

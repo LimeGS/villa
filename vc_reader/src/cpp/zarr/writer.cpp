@@ -326,6 +326,24 @@ void decompressBytes(const Json& compressor, std::span<const std::uint8_t> data,
     decode(codec, data.data(), data.size(), out.data(), out.size());
 }
 
+std::vector<std::uint8_t> decodeChunk(const Json& metadata, std::span<const std::uint8_t> data, std::size_t maxDecodeBytes)
+{
+    const auto meta = parseArrayMeta(metadata);
+    const auto size = meta.chunkBytes();
+    if (size > maxDecodeBytes) throw std::invalid_argument("chunk exceeds decode byte limit");
+    const auto codec = parse_chunk_codec(meta.codec());
+    if (codec.layout) {
+        if (codec.layout->encodedBytes > maxDecodeBytes)
+            throw std::invalid_argument("chunk filter exceeds decode byte limit");
+        for (const auto& filter : codec.layout->filters)
+            if (filter.before > maxDecodeBytes || filter.after > maxDecodeBytes)
+                throw std::invalid_argument("chunk filter exceeds decode byte limit");
+    }
+    std::vector<std::uint8_t> out(size);
+    decode(codec, data.data(), data.size(), out.data(), out.size());
+    return out;
+}
+
 std::vector<std::uint8_t> decompressZstdFrame(std::span<const std::uint8_t> data, std::size_t maxBytes)
 {
     const auto size = ZSTD_getFrameContentSize(data.data(), data.size());
@@ -353,7 +371,7 @@ CreateOptions createOptionsLike(const ArrayMeta& meta)
     options.separator = meta.separator;
     options.fillValue = meta.raw.value("fill_value", Json(0));
     options.compressor = meta.compressor.is_null() ? "none" : meta.compressor.at("id").get<std::string>();
-    options.packbits = !meta.filters.is_null() && !meta.filters.empty();
+    options.packbits = meta.filters.is_array() && meta.filters.size() == 1 && meta.filters[0].value("id", "") == "packbits";
     if (!meta.compressor.is_null()) {
         const auto encode = encodeOptions(meta.compressor);
         options.level = options.compressor == "volcomp" ? int(encode.q) : encode.level;
@@ -477,6 +495,7 @@ Writer Writer::open(const fs::path& path, const Access& access)
             impl->canonicalPath = fs::canonical(path);
     }
     impl->codec = parse_chunk_codec(impl->meta.codec());
+    if (impl->codec.layout) throw std::invalid_argument("filtered/Fortran chunk layouts are read-only");
     impl->encode = encodeOptions(impl->meta.compressor);
     options.threads = 4;
     // Mutable arrays must see atomic replacements by this or another writer.

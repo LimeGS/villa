@@ -19,16 +19,17 @@ struct Store::Impl {
     bool remote = false;
     Access access;
     int connections = 16;
+    std::optional<std::size_t> maxReadBytes;
     std::shared_ptr<HttpClient> http;
     MetadataReader reader;
     std::mutex mutex;  // guards reader and access across a key reload
 
-    Impl(const fs::path& path, const Access& keys, int count)
-        : location(path.string()), remote(isRemote(location)), access(keys), connections(count)
+    Impl(const fs::path& path, const Access& keys, int count, std::optional<std::size_t> limit)
+        : location(path.string()), remote(isRemote(location)), access(keys), connections(count), maxReadBytes(limit)
     {
         while (location.size() > 1 && location.back() == '/')
             location.pop_back();
-        reader = metadataReader(access, connections);
+        reader = metadataReader(access, connections, maxReadBytes);
         if (remote && writable()) {
             HttpOptions options;
             options.connections = connections;
@@ -63,7 +64,7 @@ struct Store::Impl {
             reloadEnvironmentKeys(access);
             if (http)
                 http->set_auth(access.auth);
-            reader = metadataReader(access, connections);
+            reader = metadataReader(access, connections, maxReadBytes);
         }
         return request();
     }
@@ -75,8 +76,8 @@ struct Store::Impl {
     }
 };
 
-Store::Store(const fs::path& location, const Access& access, int connections)
-    : impl_(std::make_unique<Impl>(location, access, connections))
+Store::Store(const fs::path& location, const Access& access, int connections, std::optional<std::size_t> maxReadBytes)
+    : impl_(std::make_unique<Impl>(location, access, connections, maxReadBytes))
 {}
 Store::Store(Store&&) noexcept = default;
 Store& Store::operator=(Store&&) noexcept = default;

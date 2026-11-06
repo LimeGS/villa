@@ -1,6 +1,7 @@
 // Chunks compressed with zlib, gzip and volcomp read back through the native reader,
 // from Zarr v2 compressors and Zarr v3 codec pipelines (plain and sharded).
 #include "vc_reader/zarr.hpp"
+#include "vc_reader/zarr_write.hpp"
 #include "vc_reader/native/array.hpp"
 
 #include <volcomp_lib.h>
@@ -128,6 +129,16 @@ int main()
         }
     } cleanup{root};
     try {
+        const auto meta = vcr::zarr::Json::parse(R"({"zarr_format":2,"shape":[1,2,3],"chunks":[1,2,3],
+            "dtype":"|u1","compressor":null,"order":"F","fill_value":0,
+            "filters":[{"id":"delta","dtype":"|u1","astype":"|u1"}]})");
+        const std::vector<uint8_t> snapshot{0, 3, 254, 3, 254, 3};
+        require(vcr::zarr::decodeChunk(meta, snapshot, 6) == std::vector<uint8_t>{0, 1, 2, 3, 4, 5},
+                "filtered Fortran snapshot preserves C-order values");
+        bool refused = false;
+        try { vcr::zarr::decodeChunk(meta, snapshot, 5); }
+        catch (const std::invalid_argument&) { refused = true; }
+        require(refused, "snapshot decode limit enforced");
         std::vector<uint8_t> data(kEdge * kEdge * kEdge);
         for (size_t i = 0; i < data.size(); ++i)
             data[i] = uint8_t(128 + 100 * std::sin(double(i % 977) * 0.05) + double(i / (kEdge * kEdge)) * 0.1);

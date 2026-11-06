@@ -4,6 +4,7 @@
 #pragma once
 
 #include "lzw.hpp"
+#include "chunk_layout.hpp"
 
 #include <blosc.h>
 #include <lz4.h>
@@ -282,12 +283,18 @@ inline std::vector<std::uint8_t> encode(Codec codec, const EncodeOptions& o, con
 struct ChunkCodec {
     Codec compressor = Codec::Raw;
     bool packbits = false;
+    std::shared_ptr<const ChunkLayout> layout;
 
-    bool operator==(Codec other) const { return !packbits && compressor == other; }
+    bool operator==(Codec other) const { return !packbits && !layout && compressor == other; }
 };
 
 inline ChunkCodec parse_chunk_codec(const std::string& id)
 {
+    constexpr std::string_view layout = "layout:";
+    if (id.starts_with(layout)) {
+        const auto spec = nlohmann::json::parse(id.substr(layout.size()));
+        return {parse_codec(spec.at("codec").get<std::string>()), false, std::make_shared<ChunkLayout>(spec)};
+    }
     constexpr std::string_view packed = "packbits+";
     if (id.starts_with(packed))
         return {parse_codec(id.substr(packed.size())), true};
@@ -318,6 +325,12 @@ inline std::vector<std::uint8_t> pack_bits(const std::uint8_t* src, std::size_t 
 
 inline void decode(const ChunkCodec& codec, const std::uint8_t* src, std::size_t n, std::uint8_t* dst, std::size_t dst_n)
 {
+    if (codec.layout) {
+        if (dst_n != codec.layout->bytes) throw std::runtime_error("invalid chunk layout byte size");
+        std::vector<std::uint8_t> work(codec.layout->encodedBytes);
+        decode(codec.compressor, src, n, work.data(), work.size());
+        return codec.layout->decode(std::move(work), dst, dst_n);
+    }
     if (!codec.packbits)
         return decode(codec.compressor, src, n, dst, dst_n);
     std::vector<std::uint8_t> packed(packed_size(dst_n));
@@ -328,6 +341,7 @@ inline void decode(const ChunkCodec& codec, const std::uint8_t* src, std::size_t
 inline std::vector<std::uint8_t> encode(const ChunkCodec& codec, const EncodeOptions& o, const std::uint8_t* src, std::size_t n,
                                         std::size_t itemsize, const std::vector<std::int64_t>& shape)
 {
+    if (codec.layout) throw std::invalid_argument("filtered/Fortran chunk layouts are read-only");
     if (!codec.packbits)
         return encode(codec.compressor, o, src, n, itemsize, shape);
     const auto packed = pack_bits(src, n);

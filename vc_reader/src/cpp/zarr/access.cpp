@@ -8,6 +8,7 @@
 
 #include <curl/curl.h>
 
+#include <array>
 #include <cctype>
 #include <cerrno>
 #include <cstdlib>
@@ -462,13 +463,19 @@ Access resolveAccess(const std::string& location, AuthMode mode, bool offline)
     return access;
 }
 
-MetadataReader metadataReader(const Access& access, int connections)
+MetadataReader metadataReader(const Access& access, int connections, std::optional<std::size_t> maxBytes)
 {
     HttpOptions options;
     options.connections = connections;
     options.auth = access.auth;
     auto http = std::make_shared<HttpClient>(options);
-    return [access, http](const std::string& location, const std::string& name) -> std::optional<std::string> {
+    return [access, http, maxBytes](const std::string& location, const std::string& name) -> std::optional<std::string> {
+        std::string body;
+        const auto append = [&](const char* data, std::size_t n) {
+            if (maxBytes && n > *maxBytes - body.size())
+                throw std::runtime_error("object exceeds read byte limit");
+            body.append(data, n);
+        };
         if (!isRemote(location)) {
             const auto path = std::filesystem::path(location) / name;
             std::error_code ec;
@@ -478,20 +485,31 @@ MetadataReader metadataReader(const Access& access, int connections)
             std::ifstream in(path, std::ios::binary);
             if (!in)
                 throw std::filesystem::filesystem_error("cannot read", path, std::error_code(errno, std::generic_category()));
-            std::ostringstream text;
-            text << in.rdbuf();
-            return text.str();
+            if (maxBytes && std::filesystem::file_size(path) > *maxBytes)
+                throw std::runtime_error("object exceeds read byte limit");
+            std::array<char, 65536> buffer;
+            while (in) {
+                in.read(buffer.data(), buffer.size());
+                append(buffer.data(), std::size_t(in.gcount()));
+            }
+            if (!in.eof())
+                throw std::runtime_error("failed reading object: " + path.string());
+            return body;
         }
-        std::vector<std::uint8_t> body;
         try {
-            if (!http->get(access.url(joinLocation(location, name)), body))
+            const auto response = http->get_stream(access.url(joinLocation(location, name)),
+                [&] { body.clear(); }, append, {}, 200, [&](const HttpResponse& headers) {
+                    if (maxBytes && headers.content_length && *headers.content_length > *maxBytes)
+                        throw std::runtime_error("object exceeds read byte limit");
+                });
+            if (response.status == 404)
                 return std::nullopt;
         } catch (const HttpDenied& e) {
             if (access.kind == Access::Kind::Anonymous)
                 throw HttpDenied(std::string(e.what()) + " (requested anonymously: pass credentials)");
             throw;
         }
-        return std::string(body.begin(), body.end());
+        return body;
     };
 }
 

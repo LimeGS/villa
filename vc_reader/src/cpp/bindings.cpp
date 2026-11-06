@@ -658,6 +658,15 @@ NB_MODULE(_reader, m)
 
     using vcr::zarr::Writer;
     using ConstBytes = nb::ndarray<nb::ro, nb::c_contig, nb::device::cpu>;
+    m.def("decode_chunk", [](ConstBytes data, const nb::object& metadata, std::size_t maxDecodeBytes) {
+        const auto config = to_json(metadata);
+        std::vector<std::uint8_t> decoded;
+        {
+            nb::gil_scoped_release release;
+            decoded = vcr::zarr::decodeChunk(config, {static_cast<const std::uint8_t*>(data.data()), data.nbytes()}, maxDecodeBytes);
+        }
+        return nb::bytes(reinterpret_cast<const char*>(decoded.data()), decoded.size());
+    }, "data"_a, "metadata"_a, "max_decode_bytes"_a = 268435456);
     m.def("compress_bytes", [](ConstBytes data, const nb::object& compressor, std::size_t itemsize, const vcr::Index& shape) {
         const auto config = to_json(compressor);
         std::vector<std::uint8_t> encoded;
@@ -764,9 +773,10 @@ NB_MODULE(_reader, m)
         }, "value"_a.none());
     using vcr::zarr::Store;
     nb::class_<Store>(m, "Store", "The objects below a local directory or an s3:// prefix.")
-        .def("__init__", [](Store* store, const std::string& location, const vcr::zarr::Access& access, int connections) {
-            new (store) Store(location, access, connections);
-        }, "location"_a, "access"_a, "connections"_a = 16)
+        .def("__init__", [](Store* store, const std::string& location, const vcr::zarr::Access& access, int connections,
+                            std::optional<std::size_t> maxReadBytes) {
+            new (store) Store(location, access, connections, maxReadBytes);
+        }, "location"_a, "access"_a, "connections"_a = 16, "max_read_bytes"_a = nb::none())
         .def_prop_ro("location", &Store::location)
         .def_prop_ro("access", [](const Store& s) { return s.access(); })
         .def_prop_ro("remote", &Store::remote)
@@ -914,6 +924,10 @@ NB_MODULE(_reader, m)
         .def_prop_ro("max_bytes", &vcr::DiskCache::max_bytes, nb::call_guard<nb::gil_scoped_release>())
         .def("set_min_free_bytes", &vcr::DiskCache::set_min_free_bytes, "bytes"_a)
         .def_prop_ro("low_space", &vcr::DiskCache::low_space)
+        .def("write", [](vcr::DiskCache& cache, const std::string& path, ConstBytes data) {
+            nb::gil_scoped_release release;
+            cache.write(path, static_cast<const std::uint8_t*>(data.data()), data.nbytes());
+        }, "path"_a, "data"_a)
         .def("open_file", [](vcr::DiskCache& cache, const std::string& path, const std::string& location,
                               const vcr::zarr::Access& access) {
             nb::gil_scoped_release release;

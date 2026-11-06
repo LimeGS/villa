@@ -121,7 +121,9 @@ std::optional<std::string> bucketRegion(const std::string& bucket);
 // Reads one metadata object (e.g. ".zarray") of a node. nullopt only when it does not
 // exist; any other failure throws (std::filesystem::filesystem_error for a local one).
 using MetadataReader = std::function<std::optional<std::string>(const std::string& location, const std::string& name)>;
-MetadataReader metadataReader(const Access& access, int connections = 4);
+// Optional per-object limit, checked during local/remote reads and HTTP decoding.
+MetadataReader metadataReader(const Access& access, int connections = 4,
+                              std::optional<std::size_t> maxBytes = std::nullopt);
 
 // ---- disk caches ---------------------------------------------------------------------
 
